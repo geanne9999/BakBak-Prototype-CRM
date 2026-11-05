@@ -5,7 +5,7 @@ import {
 } from './store.js';
 import { answer, fillFaq, WELCOME_QUICK, QUICK_MAP, welcomeMsg } from './bot.js';
 import { Icon, Logo, Btn, Badge, Modal, Toggle, Tabs, Field, Empty, Avatar } from './ui.jsx';
-import { useAdmin, PageHead, Stat } from './admin-common.jsx';
+import { useAdmin, PageHead, Stat, RangeBar, rangeOf, rangeStats } from './admin-common.jsx';
 import { staffList } from './p-service.jsx';
 import { peso, fmtWhen, fmtAgo, hm12, cx, num } from './util.js';
 
@@ -13,10 +13,11 @@ const { useState, useRef, useEffect } = React;
 
 export function Chatbot() {
   const s = useStore();
+  const t = useNow(30000);
   const { open } = useAdmin();
   const [word, setWord] = useState('');
   const on = s.botLive !== false;
-  const conv = s.base.conversations;
+  const k = rangeStats(s, rangeOf(s, t));
   const addWord = () => { const w = word.trim().toLowerCase(); if (!w) return; if (!s.handoff.includes(w)) { setHandoff([...s.handoff, w]); toast(`“${w}” now hands chats to staff`); } setWord(''); };
   return (
     <>
@@ -24,10 +25,11 @@ export function Chatbot() {
         <span className="row small strong">{on ? 'Bot is on' : 'Bot is off'}<Toggle on={on} label="Bot on" onChange={(v) => { setBotLive(v); toast(v ? 'The bot answers new messages again' : 'The bot is off. New messages go straight to staff.'); }} /></span>
         <Btn kind="primary" icon="plus" onClick={() => open('faq')}>Add answer</Btn>
       </PageHead>
+      <RangeBar s={s} t={t} />
       <div className="grid g4 keep2">
-        <Stat label="Conversations this month" value={num(conv)} icon="message-circle" />
-        <Stat label="Answered by the bot alone" value={`${Math.round(((conv - s.base.handoffs) / conv) * 100)}%`} icon="bot" tone="violet" />
-        <Stat label="Handed to staff" value={num(s.base.handoffs)} icon="hand-helping" tone="orange" />
+        <Stat label="Conversations" value={num(k.conversations)} icon="message-circle" />
+        <Stat label="Answered by the bot alone" value={k.botAlone == null ? '—' : `${Math.round(k.botAlone)}%`} icon="bot" tone="violet" />
+        <Stat label="Handed to staff" value={num(k.handoffs)} icon="hand-helping" tone="orange" />
         <Stat label="Saved answers" value={s.faqs.filter((f) => !f.off).length} sub={`${s.faqs.length} in all`} icon="book-open" tone="teal" />
       </div>
       <div className="grid g-side">

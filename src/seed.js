@@ -1,6 +1,6 @@
 // Sample data, taken from the Figma screens on the "change it here" page (option A).
 // Everything here is simulated. The demo saves changes in this browser only, until "Reset demo".
-import { at, randCode } from './util.js';
+import { at, randCode, BASE, DAY, MIN, sum } from './util.js';
 
 export const MENU = [
   { id: 'half', name: 'Half Ala Carte', short: 'Half', details: '6 pcs · 1 flavor', desc: 'Boneless chicken in 1 flavor', price: 179, cat: 'Chicken', flavors: 1, best: true, available: true },
@@ -217,7 +217,7 @@ export function seed() {
     phone: { bag: [], unread: 0 },
     counters: { order: 1051, ticket: 133, msg: 1, cust: 1, misc: 100 },
     base: {
-      customers: 960, newCustomers: 112, active: 474, members: 333, inactive: 120, orders: 1920, sales: 391450,
+      customers: 960, newCustomers: 112, active: 474, members: 333, inactive: 120,
       pointsOut: 19200, closedTickets: 23, conversations: 412, handoffs: 87, surveys: 186, satisfaction: 4.24,
     },
   };
@@ -226,3 +226,182 @@ export function seed() {
 export function makeReceiptCode() {
   return `BB-${randCode(4)}-${randCode(4)}`;
 }
+
+// ---------- simulated history behind the dashboard, Prep planner and chat stats ----------
+// Figure 8 of the paper: "Orders from 16 Sep to 13 Oct 2026 (4 weeks)". The daily history below is built so that
+// these days, added to the sample orders, tickets and ratings above that fall in them, give exactly these numbers.
+// The last group is not in Figure 8: the paper names those KPIs in Table 8 without values, so these are sample values.
+export const FIG8 = {
+  from: new Date(2026, 8, 16).getTime(),
+  weeks: 4,
+  weeklySales: [88420, 93460, 99100, 110470],
+  channels: { 'Walk-in': [960, 193895], Messenger: [288, 58525], Foodpanda: [480, 100000], Grab: [192, 39030] }, // [orders, sales]
+  flavors: { 'Soy Garlic': 461, 'Bak Bak Special': 365, 'Garlic Parmesan': 307, 'Yang Nyeom': 269, 'Smoke BBQ': 211, 'White Cheddar': 173, "Jack Daniel's": 134 },
+  // Orders in the 4 weeks by day (Sunday first) and hour (10 AM to 8 PM). Rows and columns add up to Figure 8's two
+  // charts. Saturday 5 PM is 68, or 17 per Saturday, the number Today's plan uses.
+  byDayHour: [
+    [17, 42, 59, 32, 19, 21, 36, 64, 49, 18, 7],
+    [9, 18, 30, 15, 8, 14, 24, 34, 31, 12, 6],
+    [9, 17, 29, 15, 8, 14, 23, 32, 30, 12, 5],
+    [9, 23, 33, 14, 8, 17, 26, 36, 33, 13, 5],
+    [9, 23, 33, 17, 7, 17, 26, 36, 37, 13, 6],
+    [15, 33, 49, 23, 11, 23, 38, 64, 49, 19, 9],
+    [16, 35, 53, 39, 22, 25, 42, 68, 57, 20, 10],
+  ],
+  active: 474, repeat: 275,
+  tickets: 29, closed: 25, resolutionMin: 42,
+  ratings: 186, stars: 789, // 789 / 186 = 4.24
+  conversations: 412, handoffs: 87, // from the Chatbot page; with 288 Messenger orders, sales conversion is 70%
+  replyMinutes: 107, // first-reply minutes across the 25 closed tickets: 4.3 min on average, as on the Tickets page
+  notEncoded: 103, // orders and tickets handled but not encoded: CRM usage 1,949 of 2,052, or 95%
+};
+const HISTORY_START = new Date(2025, 8, 14); // the oldest customer record in the sample data
+
+function randomizer(seedNo) { // small seeded generator, so the history is the same in every browser and after Reset
+  let a = seedNo;
+  return () => {
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+// Splits a whole number by weights, keeping the total exact.
+function splitInt(total, weights) {
+  const w = sum(weights);
+  const raw = weights.map((x) => (w ? (total * x) / w : total / weights.length));
+  const out = raw.map(Math.floor);
+  const order = raw.map((v, i) => [v - Math.floor(v), i]).sort((a, b) => b[0] - a[0]);
+  let left = total - sum(out);
+  for (let i = 0; left > 0; i = (i + 1) % order.length, left--) out[order[i][1]]++;
+  return out;
+}
+// A table of whole numbers with exact row and column totals. Each row takes its share of what the columns still need.
+function fitTable(rows, cols) {
+  const need = cols.slice();
+  return rows.map((row) => {
+    const cells = splitInt(row, need);
+    cells.forEach((v, j) => { need[j] -= v; });
+    return cells;
+  });
+}
+
+function buildHistory() {
+  const sample = seed();
+  const rnd = randomizer(20261017);
+  const channels = Object.keys(FIG8.channels);
+  const flavors = Object.keys(FIG8.flavors);
+  const dayTs = (i) => new Date(HISTORY_START.getFullYear(), HISTORY_START.getMonth(), HISTORY_START.getDate() + i).getTime();
+  const dayOf = (ts) => { const d = new Date(ts); return Math.round((new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime() - dayTs(0)) / DAY); };
+  const count = dayOf(BASE); // days before today; today is only the sample orders and whatever happens in the demo
+  const w0 = dayOf(FIG8.from);
+  const span = FIG8.weeks * 7;
+  const inFig = (ts) => dayOf(ts) >= w0 && dayOf(ts) < w0 + span;
+  const weekOf = (ts) => Math.floor((dayOf(ts) - w0) / 7);
+
+  // What the sample records already put inside Figure 8's weeks, so the history adds only the rest.
+  const so = sample.orders.filter((o) => inFig(o.ts));
+  const matrix = FIG8.byDayHour.map((r) => r.slice());
+  const weekly = FIG8.weeklySales.slice();
+  const chOrders = channels.map((c) => FIG8.channels[c][0]);
+  const chSales = channels.map((c) => FIG8.channels[c][1]);
+  const flavorLeft = flavors.map((f) => FIG8.flavors[f]);
+  for (const o of so) {
+    const d = new Date(o.ts);
+    matrix[d.getDay()][d.getHours() - 10]--;
+    const c = channels.indexOf(o.channel);
+    chOrders[c]--;
+    if (o.paidAt) { weekly[weekOf(o.ts)] -= o.total; chSales[c] -= o.total; }
+    for (const i of o.items) for (const f of i.flavors || []) flavorLeft[flavors.indexOf(f)] -= i.qty;
+  }
+  const st = sample.tickets.filter((x) => inFig(x.created));
+  const sc = st.filter((x) => x.status === 'closed' && inFig(x.closedAt));
+  const sr = sample.ratings.filter((r) => inFig(r.ts));
+
+  const days = [];
+  for (let i = 0; i < count; i++) {
+    const ts = dayTs(i);
+    days.push({ ts, dow: new Date(ts).getDay(), hours: [], orders: 0, sales: 0, chOrders: [], chSales: [], flavors: [], conversations: 0, handoffs: 0, tickets: 0, closed: 0, resolutionMin: 0, replied: 0, replyMin: 0, ratings: 0, stars: 0, notEncoded: 0 });
+  }
+  const fig = days.slice(w0, w0 + span);
+
+  // Figure 8's four weeks: exact totals, spread by day of week, then by week in line with weekly sales.
+  matrix.forEach((row, dow) => {
+    const dates = fig.filter((d) => d.dow === dow);
+    const table = fitTable(splitInt(sum(row), FIG8.weeklySales), row);
+    dates.forEach((d, k) => { d.hours = table[k]; d.orders = sum(table[k]); });
+  });
+  const load = fig.map((d) => d.orders);
+  fitTable(load, chOrders).forEach((r, k) => { fig[k].chOrders = r; });
+  fitTable(splitInt(sum(flavorLeft), load), flavorLeft).forEach((r, k) => { fig[k].flavors = r; });
+  fitTable(weekly, chSales).forEach((r, w) => {
+    const week = fig.slice(w * 7, w * 7 + 7);
+    channels.forEach((_, c) => {
+      const parts = splitInt(r[c], week.map((d) => d.chOrders[c]));
+      week.forEach((d, k) => { d.chSales[c] = parts[k]; });
+    });
+  });
+  const spread = (key, total, weights) => splitInt(total, weights).forEach((v, k) => { fig[k][key] = v; });
+  spread('conversations', FIG8.conversations, load);
+  spread('handoffs', FIG8.handoffs, load);
+  spread('tickets', FIG8.tickets - st.length, load);
+  spread('closed', FIG8.closed - sc.length, load);
+  const closedLoad = fig.map((d) => d.closed);
+  spread('resolutionMin', FIG8.resolutionMin * FIG8.closed - sum(sc, (x) => Math.round((x.closedAt - x.created) / MIN)), closedLoad);
+  spread('replied', FIG8.closed - sc.length, closedLoad);
+  spread('replyMin', FIG8.replyMinutes - sum(sc, (x) => x.firstReply), closedLoad);
+  spread('ratings', FIG8.ratings - sr.length, load);
+  const ratingLoad = fig.map((d) => d.ratings);
+  spread('stars', FIG8.stars - sum(sr, (r) => r.stars), ratingLoad);
+  spread('notEncoded', FIG8.notEncoded, load);
+
+  // Every other day: the same weekly pattern, growing from about 40% of Figure 8's level to where it starts.
+  const avgPrice = chSales.map((v, c) => v / chOrders[c]);
+  const whole = (x) => { const f = Math.floor(x); return f + (rnd() < x - f ? 1 : 0); };
+  days.forEach((d, i) => {
+    if (i >= w0 && i < w0 + span) return;
+    const after = i >= w0 + span;
+    const p = after ? 1 : i / w0; // 0 at the start of the history, 1 from Figure 8 on
+    const level = after ? 1.15 : 0.4 + 0.5 * p;
+    const wobble = 0.92 + rnd() * 0.16;
+    d.hours = FIG8.byDayHour[d.dow].map((v) => whole((v / FIG8.weeks) * level * wobble));
+    d.orders = sum(d.hours);
+    d.chOrders = splitInt(d.orders, chOrders);
+    d.chSales = d.chOrders.map((n, c) => Math.round(n * avgPrice[c] * (0.97 + rnd() * 0.06)));
+    d.flavors = splitInt(d.orders, flavorLeft);
+    const mix = (start, end) => start + (end - start) * p;
+    d.conversations = whole(d.orders * mix(0.26, 0.215));
+    d.handoffs = whole(d.conversations * mix(0.3, 0.21));
+    d.tickets = whole(d.orders * 0.015);
+    d.closed = d.tickets;
+    d.resolutionMin = Math.round(d.closed * mix(70, 44));
+    d.replied = d.closed;
+    d.replyMin = Math.round(d.replied * mix(9, 4.6));
+    d.ratings = whole(d.orders * 0.097);
+    d.stars = Math.min(d.ratings * 5, Math.round(d.ratings * mix(4.05, 4.24)));
+    d.notEncoded = whole((d.orders + d.tickets) * mix(0.3, 0.05));
+  });
+  days.forEach((d) => { d.sales = sum(d.chSales); });
+
+  // Which days each customer ordered, so retention (who ordered more than once in a range) is counted, not stored.
+  // The named sample customers count from their own orders, so they are left out of this list.
+  const sampleCounts = {};
+  for (const o of so) if (o.cid) sampleCounts[o.cid] = (sampleCounts[o.cid] || 0) + 1;
+  const sampleCids = Object.values(sampleCounts);
+  const repeat = FIG8.repeat - sampleCids.filter((n) => n >= 2).length;
+  const oneTime = FIG8.active - FIG8.repeat - sampleCids.filter((n) => n === 1).length;
+  const pool = sample.base.customers - sample.customers.length;
+  const visits = [];
+  const anyDay = (start, end) => start + Math.floor(rnd() * (end - start));
+  for (let c = 0; c < pool; c++) {
+    const v = [];
+    const inWindow = c < repeat ? 2 + Math.floor(rnd() * 4) : c < repeat + oneTime ? 1 : 0;
+    for (let k = 0; k < inWindow; k++) v.push(anyDay(w0, w0 + span));
+    const earlier = inWindow ? Math.floor(rnd() * 5) : 1 + Math.floor(rnd() * 5);
+    for (let k = 0; k < earlier; k++) v.push(anyDay(Math.floor(rnd() * w0), w0));
+    if (rnd() < 0.12) v.push(anyDay(w0 + span, count));
+    visits.push(v.map((i) => dayTs(i)));
+  }
+  return { channels, flavors, days, visits };
+}
+export const HISTORY = buildHistory();

@@ -836,6 +836,7 @@ export const ROLE_CAN = { Owner: 'Everything, including approvals', 'Order-takin
 export function readAllNotifs() { update((s) => { s.notifs.forEach((n) => { n.read = true; }); }); }
 export function clearPhoneUnread() { if (state.phone.unread) update((s) => { s.phone.unread = 0; }); }
 export function addReport(f) { update((s) => { s.reports = s.reports || []; s.reports.push({ id: nid(s, 'rp'), name: f.name, kind: f.kind, cat: f.cat, created: now(s) }); }); }
+export function setRange(id) { update((s) => { s.range = id; }); }
 
 // Overdue ticket alerts (workflow "Overdue ticket alert").
 setInterval(() => {

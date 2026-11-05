@@ -4,8 +4,8 @@ import {
   createTicket, updateTicket, addTicketNote, itemsLabel, ACTIVE,
 } from './store.js';
 import { Icon, Btn, Badge, ChannelBadge, Avatar, Modal, Seg, Tabs, Field, Empty, Popover } from './ui.jsx';
-import { useAdmin, PageHead, OrderBadge, TicketBadge, TICKET_STATUS, TICKET_TYPES, CustName, phoneText, dueText, openTickets } from './admin-common.jsx';
-import { peso, fmtTime, fmtWhen, fmtAgo, firstName, cx, sum, MIN, BASE } from './util.js';
+import { useAdmin, PageHead, OrderBadge, TicketBadge, TICKET_STATUS, TICKET_TYPES, CustName, phoneText, dueText, openTickets, RangeBar, rangeOf, rangeStats } from './admin-common.jsx';
+import { peso, fmtTime, fmtWhen, fmtAgo, firstName, cx, sum, num, MIN, BASE } from './util.js';
 
 const { useState, useEffect, useRef, useLayoutEffect } = React;
 
@@ -37,9 +37,18 @@ export function Inbox() {
   useLayoutEffect(() => { if (!sel && boxRef.current && boxRef.current.offsetWidth > 700 && filtered[0]) setSel(filtered[0].id); }, []);
   const c = sel ? s.convos.find((x) => x.id === sel) : null;
   const n = (f) => s.convos.filter(f).length;
+  const k = rangeStats(s, rangeOf(s, t)); // the stats follow the range; the conversation list below always shows everything
   return (
     <>
       <PageHead title="Inbox" sub="Messenger chats, Facebook comments and delivery-app reviews in one place. The bot answers first and hands off to staff." />
+      <RangeBar s={s} t={t} />
+      <div className="strip">
+        <div><div className="lbl">Conversations</div><div className="val">{num(k.conversations)}</div></div>
+        <div><div className="lbl">Answered by the bot alone</div><div className="val">{k.botAlone == null ? '—' : `${Math.round(k.botAlone)}%`}</div></div>
+        <div><div className="lbl">Handed to staff</div><div className="val">{num(k.handoffs)}</div></div>
+        <div><div className="lbl">Orders confirmed from chats</div><div className="val">{num(k.confirmed)}</div></div>
+        <div><div className="lbl">Average first reply</div><div className="val">{k.firstReply == null ? '—' : `${k.firstReply.toFixed(1)} min`}</div></div>
+      </div>
       <div ref={boxRef} className={cx('inbox', c && 'has-thread')}>
         <div className="ib-list">
           <div style={{ padding: '10px 10px 0' }}>

@@ -2,20 +2,12 @@
 // Rules plus the last 4 weeks of orders give recommendations. The owner decides; nothing changes until approved.
 import { useStore, useNow, toast, decideRec, saveScenario, toggleBatchDone, approveWeekend, updateRule, addRule, waitModel, waitMinutes } from './store.js';
 import { Icon, Btn, Badge, Modal, Toggle, Field, Empty, Bars } from './ui.jsx';
-import { useAdmin, PageHead, Stat, canApprove } from './admin-common.jsx';
-import { fmtTime, fmtWhen, fmtDate, cx } from './util.js';
+import { useAdmin, PageHead, Stat, canApprove, RangeBar, rangeOf, hourlyByDay } from './admin-common.jsx';
+import { fmtTime, fmtWhen, fmtDate, cx, sum } from './util.js';
 
 const { useState } = React;
 export const HOURS = ['10a', '11a', '12p', '1p', '2p', '3p', '4p', '5p', '6p', '7p', '8p'];
-export const HEAT = [
-  ['Mon', [2, 3, 6, 5, 3, 4, 6, 8, 9, 7, 4]],
-  ['Tue', [2, 3, 6, 5, 3, 4, 6, 8, 9, 7, 4]],
-  ['Wed', [2, 4, 7, 5, 3, 5, 7, 9, 10, 8, 4]],
-  ['Thu', [2, 4, 7, 6, 3, 5, 7, 9, 11, 8, 5]],
-  ['Fri', [3, 5, 9, 7, 4, 6, 9, 14, 13, 10, 6]],
-  ['Sat', [3, 5, 9, 11, 7, 6, 9, 17, 14, 10, 6]],
-  ['Sun', [3, 6, 10, 9, 6, 5, 8, 13, 12, 9, 5]],
-];
+const DAY_NAME = { Mon: 'Monday', Tue: 'Tuesday', Wed: 'Wednesday', Thu: 'Thursday', Fri: 'Friday', Sat: 'Saturday', Sun: 'Sunday' };
 const lvl = (v) => (v <= 3 ? 'hm0' : v <= 6 ? 'hm1' : v <= 10 ? 'hm2' : v <= 14 ? 'hm3' : 'hm4');
 const CALL_TONE = { Approved: 'green', Adjusted: 'orange', Dismissed: null, pending: 'violet' };
 const APPROVED_NOTE = {
@@ -92,12 +84,17 @@ export function DssToday() {
 
 export function DssPrep() {
   const s = useStore();
+  const t = useNow(30000);
   const { go } = useAdmin();
   const owner = canApprove(s.role);
   const prep = s.prep;
+  const range = rangeOf(s, t);
+  const { rows, todayOnly } = hourlyByDay(s, range);
+  const evenings = rows.filter(([d]) => !todayOnly.includes(d)).map(([d, v]) => [d, sum(v.slice(7, 10))]).sort((a, b) => b[1] - a[1]);
   return (
     <>
-      <PageHead eyebrow="Decision support" title="Prep planner" sub="Average orders by hour over the last 4 weeks, and the prep plans for this weekend." />
+      <PageHead eyebrow="Decision support" title="Prep planner" sub={`Average orders by hour ${range.phrase}, and the prep plans for this weekend.`} />
+      <RangeBar s={s} t={t} />
       <div className="grid g3">
         {s.weekend.map((w, i) => (
           <div key={w.day} className="card col">
@@ -107,13 +104,13 @@ export function DssPrep() {
           </div>
         ))}
       </div>
-      <div className="small muted" style={{ marginBottom: 4 }}>Your busiest times are Saturday and Friday evenings. The chart below shows every hour across the week.</div>
+      <div className="small muted" style={{ marginBottom: 4 }}>Your busiest times {range.phrase} are {DAY_NAME[evenings[0][0]]} and {DAY_NAME[evenings[1][0]]} evenings. The chart below shows every hour across the week.</div>
       <div className="card">
-        <div className="card-h"><div><div className="card-t">Orders by hour</div><div className="card-s">Average of the last 4 weeks. Darker means busier.</div></div><div className="row tiny faint wrap">{[['hm0', 'Quiet (0–3)'], ['hm1', 'Moderate (4–6)'], ['hm2', 'Busy (7–10)'], ['hm3', 'Very busy (11–14)'], ['hm4', 'Rush (15+)']].map(([h, label]) => <span key={h} className="row gap-4" aria-label={label}><span className={h} style={{ width: 14, height: 14, borderRadius: 4, display: 'inline-block' }} />{label}</span>)}</div></div>
+        <div className="card-h"><div><div className="card-t">Orders by hour</div><div className="card-s">Average of each day {range.phrase}.{todayOnly.length ? ` ${todayOnly.join(', ')} is today so far.` : ''} Darker means busier.</div></div><div className="row tiny faint wrap">{[['hm0', 'Quiet (0–3)'], ['hm1', 'Moderate (4–6)'], ['hm2', 'Busy (7–10)'], ['hm3', 'Very busy (11–14)'], ['hm4', 'Rush (15+)']].map(([h, label]) => <span key={h} className="row gap-4" aria-label={label}><span className={h} style={{ width: 14, height: 14, borderRadius: 4, display: 'inline-block' }} />{label}</span>)}</div></div>
         <div className="tbl-wrap">
           <table className="heat">
             <thead><tr><th />{HOURS.map((h) => <th key={h}>{h}</th>)}</tr></thead>
-            <tbody>{HEAT.map(([d, v]) => <tr key={d}><th>{d}</th>{v.map((x, i) => <td key={i} className={lvl(x)} title={`${d} ${HOURS[i]}: ${x} orders`}>{x}</td>)}</tr>)}</tbody>
+            <tbody>{rows.map(([d, v]) => <tr key={d}><th>{d}</th>{v.map((x, i) => <td key={i} className={lvl(x)} title={`${d} ${HOURS[i]}: ${x} orders`}>{x}</td>)}</tr>)}</tbody>
           </table>
         </div>
       </div>

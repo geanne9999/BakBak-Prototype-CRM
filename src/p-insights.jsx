@@ -3,24 +3,21 @@ import { useStore, useNow, toast, currentUser, decideRec, waitModel, waitMinutes
 import { Icon, Btn, Badge, ChannelBadge, Modal, Seg, Field, Empty, Bars, HBars, Donut, Spark } from './ui.jsx';
 import {
   useAdmin, PageHead, Stat, canApprove, todayOrders, monthOrders, paidSales, avgWaitToday, satisfaction, membersCount, customersCount,
-  openTickets, openNotif,
+  openTickets, openNotif, RangeBar, rangeOf, rangeStats, salesBuckets, hourlyByDay,
 } from './admin-common.jsx';
-import { HEAT, HOURS } from './p-dss.jsx';
+import { HOURS } from './p-dss.jsx';
 import { peso, pesoK, num, fmtTime, fmtWhen, fmtAgo, fmtLongDate, firstName, cx, sum, sameDay, BASE } from './util.js';
 
 const { useState } = React;
 const CH_COLORS = { 'Walk-in': 'var(--ch-walk)', Messenger: 'var(--ch-msgr)', Foodpanda: 'var(--ch-fp)', Grab: 'var(--ch-grab)' };
-const BASE_SPLIT = { 'Walk-in': 0.46, Messenger: 0.28, Foodpanda: 0.16, Grab: 0.1 };
-const BASE_FLAVORS = { 'Soy Garlic': 312, 'Bak Bak Special': 248, 'Garlic Parmesan': 190, 'Yang Nyeom': 160, "Jack Daniel's": 120, 'Smoke BBQ': 96, 'White Cheddar': 74 };
-
-function channelSales(s) {
-  const month = monthOrders(s).filter((o) => o.paidAt);
-  return Object.keys(BASE_SPLIT).map((ch) => ({ label: ch, value: Math.round(s.base.sales * BASE_SPLIT[ch]) + sum(month.filter((o) => o.channel === ch), (o) => o.total), color: CH_COLORS[ch] }));
-}
-function flavorCounts(s) {
-  const c = { ...BASE_FLAVORS };
-  for (const o of monthOrders(s)) for (const i of o.items) for (const f of i.flavors || []) c[f] = (c[f] || 0) + i.qty;
-  return Object.entries(c).map(([label, value]) => ({ label, value })).sort((a, b) => b.value - a.value);
+const pct = (v) => (v == null ? '—' : `${Math.round(v)}%`);
+const peakOf = (row) => row.indexOf(Math.max(...row));
+function salesNote(buckets) {
+  const v = buckets.bars.map((b) => b.value);
+  if (buckets.open) return `The last bar is still in progress.`;
+  const change = Math.round(((v[v.length - 1] - v[0]) / v[0]) * 100);
+  const grew = v.every((x, i) => !i || x > v[i - 1]);
+  return `${grew ? 'Sales grew every week, up' : change >= 0 ? 'Up' : 'Down'} ${Math.abs(change)}% from week 1 to week ${v.length}.`;
 }
 
 export function Dashboard() {
@@ -31,14 +28,19 @@ export function Dashboard() {
   const h = new Date(t).getHours();
   const greet = h < 12 ? 'Good morning' : h < 18 ? 'Good afternoon' : 'Good evening';
   const today = todayOrders(s, t);
-  const month = monthOrders(s);
   const r1 = s.recs.find((r) => r.id === 'R1');
   const pending = s.recs.filter((r) => r.status === 'pending').length;
-  const sat = satisfaction(s);
   const wait = avgWaitToday(s, t);
   const ptsToday = sum(s.ledger.filter((l) => l.pts > 0 && sameDay(l.ts, t)), (l) => l.pts);
   const plan = waitModel({ batches: 3, cashiers: 2 });
-  const chan = channelSales(s);
+  const range = rangeOf(s, t);
+  const k = rangeStats(s, range);
+  const chan = k.channels.map((c) => ({ ...c, color: CH_COLORS[c.label] }));
+  const buckets = salesBuckets(s, range);
+  const hourly = hourlyByDay(s, range);
+  const satRow = hourly.rows.find((h) => h[0] === 'Sat')[1];
+  const satToday = hourly.todayOnly.includes('Sat');
+  const pointsHeld = s.base.pointsOut + sum(s.ledger.filter((l) => l.ts >= BASE && l.pts > 0), (l) => l.pts);
   return (
     <>
       <PageHead title={`${greet}, ${firstName(user)}`} sub={`${fmtLongDate(t)} · Here’s how Bak Bak is doing.`}>
@@ -58,11 +60,18 @@ export function Dashboard() {
           <Btn onClick={() => go('dss-today')}>See today’s plan</Btn>
         </div>
       </div>
-      <div className="grid g4 keep2">
-        <Stat label="Sales this month" value={peso(s.base.sales + paidSales(month))} sub="Oct 1 to today" icon="wallet" tone="green" />
-        <Stat label="Orders this month" value={num(s.base.orders + month.length)} sub="All channels" icon="shopping-bag" />
-        <Stat label="Customers" value={num(customersCount(s))} sub={`${num(membersCount(s))} in Bak Bak Rewards`} icon="users" tone="orange" />
-        <Stat label="Satisfaction" value={`${sat.avg.toFixed(2)} / 5`} sub={`${num(sat.n)} ratings`} icon="smile" tone="teal" />
+      <RangeBar s={s} t={t} />
+      <div className="grid g5">
+        <Stat label="Sales" value={peso(k.sales)} sub="Paid orders, all channels" icon="wallet" tone="green" />
+        <Stat label="Total orders" value={num(k.orders)} sub="All channels" icon="shopping-bag" />
+        <Stat label="Customer retention" value={pct(k.retention)} sub={`${num(k.repeat)} of ${num(k.active)} active customers ordered again`} icon="refresh-cw" tone="violet" />
+        <Stat label="Customers" value={num(customersCount(s))} sub={`All on record · ${num(k.active)} active in this range`} icon="users" tone="orange" />
+        <Stat label="Loyalty members" value={num(membersCount(s))} sub={`All on record · ${num(pointsHeld)} points held`} icon="gift" tone="orange" />
+        <Stat label="Satisfaction" value={k.satisfaction == null ? '—' : `${k.satisfaction.toFixed(2)} / 5`} sub={`${num(k.ratings)} ratings`} icon="smile" tone="teal" />
+        <Stat label="Sales conversion" value={pct(k.conversion)} sub={`${num(k.confirmed)} orders confirmed from ${num(k.conversations)} chats`} icon="check-check" tone="green" />
+        <Stat label="CRM usage" value={pct(k.crmUsage)} sub={`${num(k.encoded)} of ${num(k.handled)} orders and tickets encoded`} icon="activity" />
+        <Stat label="Average ticket resolution" value={k.resolution == null ? '—' : `${Math.round(k.resolution)} min`} sub={`Created to closed · ${num(k.closed)} of ${num(k.tickets)} closed`} icon="ticket" tone="orange" />
+        <Stat label="Average first reply" value={k.firstReply == null ? '—' : `${k.firstReply.toFixed(1)} min`} sub="Ticket created to first staff reply" icon="message-circle" tone="teal" />
       </div>
       <div>
         <div className="eyebrow" style={{ marginBottom: 8 }}>Today so far</div>
@@ -74,18 +83,22 @@ export function Dashboard() {
           <div><div className="lbl">Points given</div><div className="val">{ptsToday}</div></div>
         </div>
       </div>
+      <div className="card">
+        <div className="card-h"><div><div className="card-t">{buckets.title}</div><div className="card-s">{salesNote(buckets)}</div></div></div>
+        <Bars values={buckets.bars.map((b) => b.value)} labels={buckets.bars.map((b) => b.label)} subs={buckets.bars.map((b) => b.sub)} hi={[peakOf(buckets.bars.map((b) => b.value))]} fmt={buckets.bars.length > 7 ? pesoK : peso} height={210} />
+      </div>
       <div className="grid g2">
         <div className="card">
-          <div className="card-h"><div><div className="card-t">Orders by hour on Saturdays</div><div className="card-s">Average of the last 4 Saturdays. The 5 PM rush drives today’s plan.</div></div></div>
-          <Bars values={HEAT[5][1]} labels={HOURS} hi={[7]} />
+          <div className="card-h"><div><div className="card-t">Orders by hour on Saturdays</div><div className="card-s">{satToday ? `No full Saturday ${range.phrase} yet, so this shows today so far.` : `Average of Saturdays ${range.phrase}. The 5 PM rush drives today’s plan.`}</div></div></div>
+          <Bars values={satRow} labels={HOURS} hi={[peakOf(satRow)]} />
         </div>
         <div className="card">
-          <div className="card-h"><div><div className="card-t">Sales by channel</div><div className="card-s">This month. Delivery comes only through Foodpanda and Grab.</div></div><button type="button" className="link small" onClick={() => go('report', { id: 'sales-channel' })}>Report</button></div>
-          <Donut parts={chan.map((c) => ({ ...c, fmt: pesoK(c.value) }))} label="Sales by channel" />
+          <div className="card-h"><div><div className="card-t">Sales by channel</div><div className="card-s">Orders and sales {range.phrase}. Delivery comes only through Foodpanda and Grab.</div></div><button type="button" className="link small" onClick={() => go('report', { id: 'sales-channel' })}>Report</button></div>
+          <Donut parts={chan.map((c) => ({ ...c, fmt: `${peso(c.value)} · ${num(c.orders)}` }))} size={100} label="Sales by channel" />
         </div>
         <div className="card">
-          <div className="card-h"><div><div className="card-t">Top flavors</div><div className="card-s">Pieces ordered this month</div></div><button type="button" className="link small" onClick={() => go('report', { id: 'flavors' })}>Report</button></div>
-          <HBars rows={flavorCounts(s)} />
+          <div className="card-h"><div><div className="card-t">Top flavors</div><div className="card-s">Orders per flavor {range.phrase}</div></div><button type="button" className="link small" onClick={() => go('report', { id: 'flavors' })}>Report</button></div>
+          <HBars rows={k.flavors} />
         </div>
         <div className="card">
           <div className="card-h"><div><div className="card-t">Recent activity</div><div className="card-s">Orders, chats, tickets and points as they happen</div></div></div>
@@ -172,22 +185,26 @@ export function ReportDetail() {
   const def = REPORTS.find((r) => r.id === (custom ? custom.kind : params.id));
   if (!def) return <div className="card"><Empty icon="chart-no-axes-combined" title="Report not found"><Btn onClick={() => go('reports')}>All reports</Btn></Empty></div>;
   const kind = def.id;
+  const range = rangeOf(s, t);
+  const k = rangeStats(s, range);
+  const follows = ['sales-channel', 'sales-hour', 'flavors', 'customers'].includes(kind); // these open from the dashboard, so they show its range
   let body = null;
   if (kind === 'sales-channel') {
-    const chan = channelSales(s);
+    const chan = k.channels.map((c) => ({ ...c, color: CH_COLORS[c.label] }));
     const total = sum(chan, (c) => c.value);
     body = (<div className="grid g2"><div className="card"><Donut parts={chan.map((c) => ({ ...c, fmt: pesoK(c.value) }))} size={150} label="Sales by channel" /></div>
       <div className="card" style={{ padding: 0 }}><table className="tbl"><thead><tr><th>Channel</th><th className="r">Sales</th><th className="r">Share</th></tr></thead><tbody>{chan.map((c) => <tr key={c.label}><td><ChannelBadge channel={c.label} /></td><td className="r num">{peso(c.value)}</td><td className="r num">{Math.round((c.value / total) * 100)}%</td></tr>)}<tr><td className="strong">Total</td><td className="r num strong">{peso(total)}</td><td /></tr></tbody></table></div></div>);
   } else if (kind === 'sales-hour') {
-    const row = HEAT.find((h) => h[0] === day)[1];
-    body = (<div className="card col"><Seg options={HEAT.map((h) => h[0])} value={day} onChange={setDay} label="Day" /><Bars values={row} labels={HOURS} hi={[row.indexOf(Math.max(...row))]} height={200} /><div className="small muted">Busiest hour on {day}: {HOURS[row.indexOf(Math.max(...row))]} with about {Math.max(...row)} orders.</div></div>);
+    const rows = hourlyByDay(s, range).rows;
+    const row = rows.find((h) => h[0] === day)[1];
+    body = (<div className="card col"><Seg options={rows.map((h) => h[0])} value={day} onChange={setDay} label="Day" /><Bars values={row} labels={HOURS} hi={[row.indexOf(Math.max(...row))]} height={200} /><div className="small muted">Busiest hour on {day}: {HOURS[row.indexOf(Math.max(...row))]} with about {Math.max(...row)} orders.</div></div>);
   } else if (kind === 'flavors') {
     const items = {};
     for (const o of monthOrders(s)) for (const i of o.items) items[i.name] = (items[i.name] || 0) + i.qty;
-    body = (<div className="grid g2"><div className="card"><div className="card-t">Flavors</div><div className="mt-12"><HBars rows={flavorCounts(s)} /></div></div><div className="card" style={{ padding: 0 }}><table className="tbl"><thead><tr><th>Item</th><th className="r">Sold in the sample orders</th></tr></thead><tbody>{Object.entries(items).sort((a, b) => b[1] - a[1]).map(([k, v]) => <tr key={k}><td>{k}</td><td className="r num">{v}</td></tr>)}</tbody></table></div></div>);
+    body = (<div className="grid g2"><div className="card"><div className="card-t">Flavors</div><div className="mt-12"><HBars rows={k.flavors} /></div></div><div className="card" style={{ padding: 0 }}><table className="tbl"><thead><tr><th>Item</th><th className="r">Sold in the sample orders</th></tr></thead><tbody>{Object.entries(items).sort((a, b) => b[1] - a[1]).map(([k, v]) => <tr key={k}><td>{k}</td><td className="r num">{v}</td></tr>)}</tbody></table></div></div>);
   } else if (kind === 'customers') {
     const created = s.customers.filter((c) => c.created).length;
-    body = (<div className="grid g2"><div className="card"><div className="card-t">New customers per week</div><Bars values={[21, 26, 31, 34 + created]} labels={['Sep 26', 'Oct 3', 'Oct 10', 'Oct 17']} hi={[3]} green /></div><div className="card col"><Stat label="Returning customers" value="62%" sub="Ordered 2 or more times this month" /><Stat label="All customers" value={num(customersCount(s))} /></div></div>);
+    body = (<div className="grid g2"><div className="card"><div className="card-t">New customers per week</div><Bars values={[21, 26, 31, 34 + created]} labels={['Sep 26', 'Oct 3', 'Oct 10', 'Oct 17']} hi={[3]} green /></div><div className="card col"><Stat label="Customer retention" value={pct(k.retention)} sub={`${num(k.repeat)} of ${num(k.active)} active customers ordered more than once`} /><Stat label="All customers" value={num(customersCount(s))} /></div></div>);
   } else if (kind === 'segments') {
     body = (<div className="card" style={{ padding: 0 }}><table className="tbl"><thead><tr><th>Segment</th><th>Rule</th><th className="r">Customers</th></tr></thead><tbody>{s.segments.map((g) => <tr key={g.id}><td className="strong">{g.name}</td><td className="small muted">{g.rule}</td><td className="r num">{segmentCount(s, g)}</td></tr>)}</tbody></table></div>);
   } else if (kind === 'loyalty') {
@@ -215,7 +232,7 @@ export function ReportDetail() {
   return (
     <>
       <button type="button" className="link" onClick={() => go('reports')}><Icon name="arrow-left" size={15} />Reports</button>
-      <PageHead title={custom ? custom.name : def.name} sub={`${def.desc} · ${def.live ? 'Updated with every order' : 'Updated every Monday'}`}>
+      <PageHead title={custom ? custom.name : def.name} sub={`${def.desc} · ${def.live ? 'Updated with every order' : 'Updated every Monday'}${follows ? ` · ${range.label}, ${range.dates}` : ''}`}>
         <Btn icon="download" onClick={() => toast('Downloads are off in this demo. In BakBak CRM this saves a CSV file.')}>Download CSV</Btn>
       </PageHead>
       {body}
@@ -232,13 +249,14 @@ export function Kpi() {
   const replied = s.tickets.filter((x) => x.firstReply);
   const firstReply = replied.length ? sum(replied, (x) => x.firstReply) / replied.length : 4;
   const conv = s.base.conversations;
+  const kept = rangeStats(s, rangeOf({ ...s, range: '4w' }, t)); // retention always shows the 4-week measure from the paper here
   const kpis = [
     { name: 'Average wait time', value: wait, fmt: (v) => `${v} min`, target: 15, lower: true, note: 'Paid to ready, today', live: true, spark: [24, 22, 21, 19, 18, wait] },
     { name: 'First reply to a ticket', value: firstReply, fmt: (v) => `${v.toFixed(1)} min`, target: 5, lower: true, note: 'Average this month', live: true, spark: [9, 8, 6, 5.5, 4.8, firstReply] },
     { name: 'Customer satisfaction', value: sat.avg, fmt: (v) => `${v.toFixed(2)} / 5`, target: 4.5, note: `${sat.n} ratings`, live: true, spark: [4.05, 4.1, 4.16, 4.2, 4.22, sat.avg] },
     { name: 'Answered by the chatbot alone', value: ((conv - s.base.handoffs) / conv) * 100, fmt: (v) => `${Math.round(v)}%`, target: 80, note: `${s.base.handoffs} hand-offs this month`, spark: [70, 72, 75, 77, 78, ((conv - s.base.handoffs) / conv) * 100] },
     { name: 'Loyalty members', value: (membersCount(s) / customersCount(s)) * 100, fmt: (v) => `${Math.round(v)}%`, target: 40, note: `${membersCount(s)} of ${customersCount(s)} customers`, live: true, spark: [28, 30, 31, 33, 34, (membersCount(s) / customersCount(s)) * 100] },
-    { name: 'Returning customers', value: 62, fmt: (v) => `${v}%`, target: 65, note: 'Ordered 2 or more times this month', spark: [55, 57, 58, 60, 61, 62] },
+    { name: 'Customer retention', value: kept.retention, fmt: (v) => `${Math.round(v)}%`, target: 65, note: `${kept.repeat} of ${kept.active} active customers ordered more than once, last 4 weeks`, spark: [50, 52, 53, 55, 56, kept.retention] },
     { name: 'Bak Bak cards claimed', value: (wf(s, 'receipt').runs / 120) * 100, fmt: (v) => `${Math.round(v)}%`, target: 40, note: `${wf(s, 'receipt').runs} of 120 Foodpanda and Grab orders`, live: true, spark: [18, 22, 25, 28, 30, (wf(s, 'receipt').runs / 120) * 100] },
     { name: 'Tickets closed on time', value: 87, fmt: (v) => `${v}%`, target: 90, note: 'Closed before the due time', spark: [78, 80, 83, 85, 86, 87] },
   ];

@@ -153,15 +153,15 @@ export function Toasts({ scope }) {
 export function Sim() { return <div className="sim"><Icon name="info" size={13} />All data shown are simulated. Dates are sample dates, as if BakBak CRM were already in use. Changes are saved in this browser until you reset the demo.</div>; }
 
 // ---------- charts ----------
-export function Bars({ values, labels, hi = [], fmt = (v) => v, green, height = 150 }) {
+export function Bars({ values, labels, subs, hi = [], fmt = (v) => v, green, height = 150 }) {
   const max = Math.max(1, ...values);
   return (
-    <div className="bars" style={{ height }} role="img" aria-label={labels.map((l, i) => `${l}: ${fmt(values[i])}`).join(', ')}>
+    <div className="bars" style={{ height }} role="img" aria-label={labels.map((l, i) => `${l}${subs ? ` ${subs[i]}` : ''}: ${fmt(values[i])}`).join(', ')}>
       {values.map((v, i) => (
-        <div key={i} className={cx('b', hi.includes(i) && 'hi', green && 'green')}>
+        <div key={i} className={cx('b', hi.includes(i) && 'hi', green && 'green')} title={`${labels[i]}${subs ? ` · ${subs[i]}` : ''}: ${fmt(v)}`}>
           <span className="v">{fmt(v)}</span>
-          <i style={{ height: `${Math.max(2, (v / max) * 100 - 14)}%` }} />
-          <span className="l">{labels[i]}</span>
+          <i style={{ height: `${Math.max(2, subs ? (v / max) * 76 : (v / max) * 100 - 14)}%` }} />
+          <span className="l">{labels[i]}{subs && <><br />{subs[i]}</>}</span>
         </div>
       ))}
     </div>
